@@ -9,28 +9,29 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 # Paraméterek
-mappa = "I:\\#Jelenléti ív 2025"
-start = "2025-12-01 00:00:00"
-stop = "2025-12-31 00:00:00"
-filename = "december"
+mappa = "I:\\#Jelenléti ív 2026"
+start = "2026-01-01 00:00:00"
+stop = "2026-01-31 23:59:59"
+filename = "január"
 start_time = pd.to_datetime(start)
 stop_time = pd.to_datetime(stop)
 
-# Ünnepnapok
+# Ünnepnapok (beleértve az áthelyezett pihenőnapokat is)
 unnepnapok = pd.to_datetime([
-    "2025-01-01","2025-03-15","2025-04-18","2025-04-21","2025-05-01","2025-06-09","2025-08-20","2025-10-23","2025-11-01","2025-12-25","2025-12-26"
+    "2026-01-01","2026-01-02","2026-03-15","2026-04-03","2026-04-06","2026-05-01",
+    "2026-05-25","2026-08-20","2026-08-21","2026-10-23","2026-11-01","2026-12-24",
+    "2026-12-25","2026-12-26"
 ])
 
-# Áthelyezett munkanapok
-moved_days = pd.to_datetime(["2025-05-17","2025-10-18","2025-12-13"])
+# Áthelyezett munkanapok (szombatok, amik hétköznapnak számítanak)
+moved_days = pd.to_datetime(["2026-01-10","2026-08-08","2026-12-12"])
 
-# Timedelta objektumot órákra konvertál
+# Segédfunkciók
 def to_hours(td):
     if pd.isna(td):
         return 0.0
     return td.total_seconds() / 3600
 
-# Órában megadott számot (float) átalakít HH:MM:SS formátumú stringgé
 def timedelta_to_hhmmss(hours):
     td = pd.to_timedelta(hours, unit="h")
     total_seconds = int(td.total_seconds())
@@ -38,41 +39,45 @@ def timedelta_to_hhmmss(hours):
     m, s = divmod(rem, 60)
     return f"{h:02}:{m:02}:{s:02}"
 
-# Timedelta vagy float órát float órára konvertál
 def timedelta_to_float_hours(value):
     if isinstance(value, pd.Timedelta):
         return value.total_seconds() / 3600
-    return value or 0.0  # NaN vagy None esetén 0.0
+    return value or 0.0
 
 for file in os.listdir(mappa):
     if file.endswith(".xlsx"):
         path = os.path.join(mappa, file)
 
         try:
+            # Csak a szükséges oszlopok beolvasása
             df = pd.read_excel(path, usecols=[0,1,5,6,7])
             df["Munka megkezdésének időpontja"] = pd.to_datetime(
                 df["Munka megkezdésének időpontja"], errors="coerce"
             )
 
-            # Szűrések
+            # --- SZŰRÉSEK (A .dt.normalize() biztosítja a pontos egyezést a listákkal) ---
+
+            # 1. Hétköznap: Nem ünnep ÉS (Hétköznap VAGY ledolgozós szombat)
             weekdays = df[
                 (df["Munka megkezdésének időpontja"] >= start_time) &
                 (df["Munka megkezdésének időpontja"] <= stop_time) &
                 (df["Távollét oka"] == "Rendkívüli munkavégzés") &
-                (~df["Munka megkezdésének időpontja"].isin(unnepnapok)) &
+                (~df["Munka megkezdésének időpontja"].dt.normalize().isin(unnepnapok)) &
                 ((df["Munka megkezdésének időpontja"].dt.weekday < 5) |
-                 (df["Munka megkezdésének időpontja"].isin(moved_days)))
+                 (df["Munka megkezdésének időpontja"].dt.normalize().isin(moved_days)))
             ].copy()
 
+            # 2. Pihenőnap: Nem ünnep ÉS Hétvége ÉS Nem ledolgozós szombat
             weekends = df[
                 (df["Munka megkezdésének időpontja"] >= start_time) &
                 (df["Munka megkezdésének időpontja"] <= stop_time) &
                 (df["Távollét oka"] == "Rendkívüli munkavégzés") &
-                (~df["Munka megkezdésének időpontja"].isin(unnepnapok)) &
-                (~df["Munka megkezdésének időpontja"].isin(moved_days)) &
-                (df["Munka megkezdésének időpontja"].dt.weekday >= 5)
+                (~df["Munka megkezdésének időpontja"].dt.normalize().isin(unnepnapok)) &
+                (df["Munka megkezdésének időpontja"].dt.weekday >= 5) &
+                (~df["Munka megkezdésének időpontja"].dt.normalize().isin(moved_days))
             ].copy()
 
+            # 3. Munkaszüneti nap: Benne van az ünnepnapok (és áthelyezett pihenőnapok) listájában
             holidays = df[
                 (df["Munka megkezdésének időpontja"] >= start_time) &
                 (df["Munka megkezdésének időpontja"] <= stop_time) &
@@ -80,48 +85,52 @@ for file in os.listdir(mappa):
                 (df["Munka megkezdésének időpontja"].dt.normalize().isin(unnepnapok))
             ].copy()
 
-            # Időtartamok órában (float)
+            # --- SZÁMOLÁS A MEGFELELŐ OSZLOPOKBÓL ---
+
+            # Hétköznap -> "Kiadandó/Megváltandó..." (1. oszlop)
             weekdays["Óra (dec)"] = pd.to_timedelta(
                 weekdays["Kiadandó/Megváltandó rendkívüli munkaidő"].astype(str),
                 errors="coerce"
             ).apply(to_hours)
 
+            # Pihenőnap -> "Napi munkaidő" (2. oszlop)
             weekends["Óra (dec)"] = pd.to_timedelta(
                 weekends["Napi munkaidő"].astype(str),
                 errors="coerce"
             ).apply(to_hours)
 
+            # Munkaszüneti nap -> "Napi munkaidő" (2. oszlop)
             holidays["Óra (dec)"] = pd.to_timedelta(
                 holidays["Napi munkaidő"].astype(str),
                 errors="coerce"
             ).apply(to_hours)
 
-            # Összegzés (float órában)
+            # Összegzés
             weekdays_sum = timedelta_to_float_hours(weekdays["Óra (dec)"].sum())
             weekends_sum = timedelta_to_float_hours(weekends["Óra (dec)"].sum())
             holidays_sum = timedelta_to_float_hours(holidays["Óra (dec)"].sum())
 
-            # Összegző DataFrame
+            # Eredmény táblázat
             summary = pd.DataFrame([
-                {"Kategória": "Hétköznap összesen",
-                 "Időtartam (óra)": f"{weekdays_sum:.2f}",
+                {"Kategória": "Hétköznap összesen", 
+                 "Időtartam (óra)": f"{weekdays_sum:.2f}", 
                  "Időtartam (hh:mm:ss)": timedelta_to_hhmmss(weekdays_sum)},
-                {"Kategória": "Pihenőnap összesen",
-                 "Időtartam (óra)": f"{weekends_sum:.2f}",
+                {"Kategória": "Pihenőnap összesen", 
+                 "Időtartam (óra)": f"{weekends_sum:.2f}", 
                  "Időtartam (hh:mm:ss)": timedelta_to_hhmmss(weekends_sum)},
-                {"Kategória": "Munkaszüneti nap összesen",
-                 "Időtartam (óra)": f"{holidays_sum:.2f}",
+                {"Kategória": "Munkaszüneti nap összesen", 
+                 "Időtartam (óra)": f"{holidays_sum:.2f}", 
                  "Időtartam (hh:mm:ss)": timedelta_to_hhmmss(holidays_sum)},
             ])
 
-            # Nevek kinyerése
-            wb = load_workbook(path, data_only=True)  # data_only=True: csak a cella értéke
-            sheet = wb.active  # az első munkalap
+            # Név beolvasása B367 cellából
+            wb = load_workbook(path, data_only=True)
+            sheet = wb.active
             nev = sheet["B367"].value
-            name_col = pd.DataFrame({ "Dolgozó": [nev] + [""] * len(summary) })
-            summary_with_name = pd.concat([name_col.reset_index(drop=True), summary.reset_index(drop=True)], axis=1)
+            name_col = pd.DataFrame({ "Dolgozó": [nev] + [""] * (len(summary)-1) })
+            summary_with_name = pd.concat([name_col, summary], axis=1)
 
-            # Mentés CSV-be
+            # Mentés
             output_name = os.path.splitext(file)[0] + "_" + filename + "_eredmeny.csv"
             output_path = os.path.join("../data", output_name)
             summary_with_name.to_csv(output_path, index=False, sep=";", encoding="utf-8-sig")

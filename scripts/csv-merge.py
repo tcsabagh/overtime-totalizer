@@ -4,7 +4,7 @@ import pandas as pd
 # Ez a script összesíti az adott hónap adatait csv-ből.
 
 mappa = "../data"
-month = "december"
+month = "januar"
 output_excel = f"../data/sum-{month}.xlsx"
 
 # Oszlopok meghatározása
